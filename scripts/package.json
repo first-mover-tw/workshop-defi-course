@@ -1,16 +1,27 @@
 {
-  "name": "scripts",
-  "module": "index.ts",
+  "name": "deepbook-delta-neutral-bot",
+  "version": "1.0.0",
   "type": "module",
+  "description": "Delta-neutral market making bot for DeepBook V3 on Sui",
+  "main": "./src/integrated-bot.ts",
   "scripts": {
-    "start": "bun run src/index.ts"
+    "start": "bun run ./src/integrated-bot.ts",
+    "monitor": "bun run ./src/delta-neutral-bot.ts",
+    "dev": "bun --watch ./src/integrated-bot.ts",
+    "build": "bun build ./src/integrated-bot.ts --outdir ./dist --target bun",
+    "test": "bun test"
   },
-  "private": true,
+  "dependencies": {
+    "@mysten/deepBook-v3": "link:@mysten/deepBook-v3",
+    "@mysten/sui": "link:@mysten/sui",
+    "dotenv": "^16.4.5"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/bun": "latest",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",
+    "bun-types": "latest",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.32.0",
@@ -18,16 +29,9 @@
     "eslint-plugin-prettier": "^5.5.4",
     "globals": "^16.5.0",
     "jiti": "^2.6.1",
-    "prettier": "^3.7.4",
-    "tslog": "^4.10.2"
+    "prettier": "^3.7.4"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "@mysten/sui": "^2.1.0",
-    "@pythnetwork/pyth-sui-js": "^2.4.0",
-    "dotenv": "^17.2.3",
-    "@mysten/deepbook-v3": "link:@mysten/deepbook-v3"
+  "engines": {
+    "bun": ">=1.0.0"
   }
 }

@@ -5,13 +5,14 @@ import {
   mainnetPythConfigs,
   SuiPriceServiceConnection,
   SuiPythClient,
+  mainnetPackageIds,
+  mainnetCoins,
   type BalanceManager,
   type MarginManager,
 } from "@mysten/deepbook-v3";
 import type { ClientWithExtensions, SuiClientTypes } from "@mysten/sui/client";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
-import { getJsonRpcFullnodeUrl, SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
   Transaction,
@@ -19,8 +20,8 @@ import {
 } from "@mysten/sui/transactions";
 import dotenv from "dotenv";
 import { logger } from "./logger";
-import { COIN_TYPES, CONFIG } from "./const";
-import { deriveDynamicFieldID, normalizeStructTag } from "@mysten/sui/utils";
+import { CONFIG } from "./const";
+import { normalizeStructTag } from "@mysten/sui/utils";
 import type { NetworkConfig } from "./type";
 import { bcs } from "@mysten/sui/bcs";
 dotenv.config();
@@ -31,10 +32,6 @@ const { secretKey } = decodeSuiPrivateKey(secret);
 export const signer = Ed25519Keypair.fromSecretKey(secretKey);
 
 // Client
-const suiJsonClient = new SuiJsonRpcClient({
-  url: getJsonRpcFullnodeUrl("mainnet"),
-  network: "mainnet",
-});
 // Pools info
 //https://github.com/MystenLabs/ts-sdks/blob/6000f4e96da2712ff235e64a229661b034953fc6/packages/deepbook-v3/src/utils/constants.ts#L8
 
@@ -140,6 +137,7 @@ class DeepBookMarketMaker {
     include?: SuiClientTypes.TransactionInclude,
     execute = false,
   ) {
+    tx.setSender(this.getActiveAddress());
     const res = await this.client.core.simulateTransaction({
       transaction: tx,
       include: {
@@ -159,11 +157,15 @@ class DeepBookMarketMaker {
         logger.info(
           `Execute Transaction Successfully: ${res.Transaction?.digest}`,
         );
+
+        return res;
       }
     } else {
       logger.error("transaction fails");
       tx.getData().commands.forEach((c, idx) => logger.debug({ [idx]: c }));
     }
+
+    return null;
   }
 
   async signAndExecuteTransaction(
@@ -185,9 +187,31 @@ class DeepBookMarketMaker {
     );
   }
   // Transaction
-  async createMarginManager(poolKey: string) {
-    const tx = new Transaction();
-    tx.add(this.client.deepbook.marginManager.newMarginManager(poolKey));
+  async createMarginManager(tx: Transaction, poolKey: string) {
+    // initialize
+    const { manager, initializer } =
+      this.client.deepbook.marginManager.newMarginManagerWithInitializer(
+        poolKey,
+      )(tx);
+
+    // add referral
+    tx.moveCall({
+      target: `${mainnetPackageIds.MARGIN_PACKAGE_ID}::margin_manager::set_margin_manager_referral`,
+      arguments: [
+        manager,
+        tx.object(
+          "0xf29fcdf2957836bd175a24d202d51a11eeb404c61cb4edbe6cc308ec532cfd97",
+        ),
+      ],
+      typeArguments: [mainnetCoins.SUI.type, mainnetCoins.USDC.type],
+    });
+
+    // settle
+    this.client.deepbook.marginManager.shareMarginManager(
+      poolKey,
+      manager,
+      initializer,
+    )(tx);
   }
 
   marginManagerDepositBase(
@@ -195,7 +219,6 @@ class DeepBookMarketMaker {
     managerKey: string,
     amount: number,
   ) {
-    tx.setSender(this.getActiveAddress());
     tx.add(
       this.client.deepbook.marginManager.depositBase({
         managerKey,
@@ -211,7 +234,6 @@ class DeepBookMarketMaker {
       | { amount: number; coin?: never }
       | { amount?: never; coin: TransactionArgument },
   ) {
-    tx.setSender(this.getActiveAddress());
     tx.add(
       this.client.deepbook.marginManager.depositQuote({
         managerKey,
@@ -221,7 +243,6 @@ class DeepBookMarketMaker {
   }
 
   marginManagerBorrowBase(tx: Transaction, managerKey: string, amount: number) {
-    tx.setSender(this.getActiveAddress());
     tx.add(this.client.deepbook.marginManager.borrowBase(managerKey, amount));
   }
 
@@ -230,7 +251,6 @@ class DeepBookMarketMaker {
     managerKey: string,
     amount: number,
   ) {
-    tx.setSender(this.getActiveAddress());
     tx.add(this.client.deepbook.marginManager.borrowQuote(managerKey, amount));
   }
 
@@ -239,7 +259,6 @@ class DeepBookMarketMaker {
     managerKey: string,
     amount: number,
   ) {
-    tx.setSender(this.getActiveAddress());
     return tx.add(
       this.client.deepbook.marginManager.withdrawBase(managerKey, amount),
     );
@@ -250,7 +269,6 @@ class DeepBookMarketMaker {
     managerKey: string,
     amount: number,
   ) {
-    tx.setSender(this.getActiveAddress());
     return tx.add(
       this.client.deepbook.marginManager.withdrawQuote(managerKey, amount),
     );
@@ -261,7 +279,6 @@ class DeepBookMarketMaker {
     managerKey: string,
     quantity: number,
   ) {
-    tx.setSender(this.getActiveAddress());
     tx.add(
       this.client.deepbook.poolProxy.placeMarketOrder({
         poolKey: "SUI_DBUSDC",
@@ -279,16 +296,17 @@ class DeepBookMarketMaker {
     price: number,
     isBid: boolean,
     quantity: number,
+    tickSize: number,
   ) {
-    tx.setSender(this.getActiveAddress());
     tx.add(
       this.client.deepbook.poolProxy.placeLimitOrder({
         poolKey: "SUI_DBUSDC",
         marginManagerKey: "MANAGER_1",
         clientOrderId: "123456789",
-        quantity,
         price,
+        quantity,
         isBid,
+        tickSize,
       }),
     );
   }
@@ -298,7 +316,6 @@ class DeepBookMarketMaker {
     managerKey: string,
     orders: string[],
   ) {
-    tx.setSender(this.getActiveAddress());
     tx.add(this.client.deepbook.poolProxy.cancelOrders(managerKey, orders));
   }
 
@@ -318,7 +335,6 @@ class DeepBookMarketMaker {
 
     const account = Account.parse(result.dynamicField.value.bcs);
     const openOrders = account.open_orders;
-
     return this.client.deepbook.getOrders("SUI_USDC", openOrders.contents);
     //   order:
     //    {
@@ -395,86 +411,19 @@ async function main() {
     marginManagers,
   );
 
-  const tx = new Transaction();
-  tx.setSender(marketMaker.getActiveAddress());
-
-  const orders =
-    (await marketMaker.getBalanceManagerOpenOrders("primary")) || [];
-  if (orders.length) {
-    marketMaker.marginManagerCancelOrder(
-      tx,
-      "primary",
-      orders.map((o) => o.order_id),
-    );
-  }
-
-  const quoteWithdrawal = marketMaker.marginManagerWithdrawQuote(
-    tx,
-    "primary",
-    50,
-  );
-  marketMaker.marginManagerDepositQuote(tx, "secondary", {
-    coin: quoteWithdrawal,
-  });
-
-  // const simulateTransaction = await marketMaker.simulateTransaction(
-  //   tx,
-  //   {
-  //     effects: true,
-  //   },
-  //   true,
-  // );
-  //
-  // logger.info({ simulateTransaction });
-
   const assets =
     await marketMaker.client.deepbook.getMarginManagerAssets("primary");
   logger.info({ assets });
-  //
-  // const debts =
-  //   await marketMaker.client.deepbook.getMarginManagerState("primary");
-  // logger.info({ debts });
-  // 2026.02.04 04:02:38 INFO {
-  //   debts:
-  //    {
-  //      managerId: '0x76521d778043649102f73c0acf20c0898bef7758c9e0e01a0324
-  // dc06f58e25e2',
-  //      deepbookPoolId: '0xe05dafb5133bcffb8d59f4e12465dc0e9faeaa05e3e342a
-  // 08fe135800e3e4407',
-  //      riskRatio: 939.543125361,
-  //      baseAsset: '0.2',
-  //      quoteAsset: '105.8843',
-  //      baseDebt: '0.1',
-  //      quoteDebt: '0',
-  //      basePythPrice: '112907094',
-  //      basePythDecimals: 8,
-  //      quotePythPrice: '99972603',
-  //      quotePythDecimals: 8,
-  //      currentPrice:
-  //       {
-  //
-  //       },
-  //      lowestTriggerAbovePrice:
-  //       {
-  //
-  //       },
-  //      highestTriggerBelowPrice:
-  //       {
-  //
-  //       }
-  //    }
-  // }
-
+  const debts =
+    await marketMaker.client.deepbook.getMarginManagerState("primary");
+  logger.info({ debts });
+  const midPrice = await marketMaker.client.deepbook.midPrice("SUI_USDC");
+  logger.info({ midPrice });
   const poolId = await marketMaker.client.deepbook.poolId("SUI_USDC");
   logger.info({ poolId });
 
   const openOrders = await marketMaker.getBalanceManagerOpenOrders("primary");
   openOrders?.forEach((order) => logger.info({ order }));
-  // const orderIds =
-  //   await marketMaker.client.deepbook.getConditionalOrderIds("primary");
-  // logger.info({ orderIds });
-
-  // this will abort Error if we don't have any order currently
 }
 
 main().catch(console.error);
